@@ -250,9 +250,10 @@ if model is None:
     st.stop()
 
 # Instructions for paste
+# Short helpful tip (paste feature removed)
 st.markdown("""
     <div style="text-align: center; padding: 0.5rem; margin-bottom: 1rem; background: linear-gradient(135deg, #f5f7fa 0%, #c3cfe2 100%); border-radius: 12px;">
-        <small style="color: #667eea; font-weight: 600;">� Tip: You can also paste an image from clipboard using <strong>Ctrl+V</strong> (Windows) or <strong>Cmd+V</strong> (Mac)</small>
+        <small style="color: #667eea; font-weight: 600;">Tip: Use the uploader below to provide an image.</small>
     </div>
 """, unsafe_allow_html=True)
 
@@ -264,109 +265,69 @@ uploaded_file = st.file_uploader(
     label_visibility="collapsed"
 )
 
-# Use session state to store pasted image
-if 'pasted_image' not in st.session_state:
-    st.session_state.pasted_image = None
+# --- Helper functions (decoupled from Streamlit UI) ---
+def preprocess_image(pil_image, target_size=(128, 128)):
+    """Resize and normalize a PIL.Image and return a numpy batch array."""
+    img = pil_image.convert("RGB").resize(target_size)
+    arr = np.array(img) / 255.0
+    arr = np.expand_dims(arr, axis=0)
+    return arr
 
-# JavaScript for clipboard paste functionality
-paste_component = st.components.v1.html("""
-    <div id="paste-listener" style="position: fixed; top: 0; left: 0; width: 100%; height: 100%; pointer-events: none; z-index: -1;"></div>
-    <script>
-    let lastPastedData = null;
-    
-    document.addEventListener('paste', function(e) {
-        const items = e.clipboardData.items;
-        for (let i = 0; i < items.length; i++) {
-            if (items[i].type.indexOf('image') !== -1) {
-                const blob = items[i].getAsFile();
-                const reader = new FileReader();
-                reader.onload = function(event) {
-                    const imageData = event.target.result;
-                    if (imageData !== lastPastedData) {
-                        lastPastedData = imageData;
-                        window.parent.postMessage({
-                            type: 'streamlit:setComponentValue',
-                            value: imageData
-                        }, '*');
-                    }
-                };
-                reader.readAsDataURL(blob);
-                e.preventDefault();
-            }
-        }
-    });
-    </script>
-""", height=0)
 
-# Handle pasted image
-if paste_component:
-    try:
-        # Extract base64 data
-        if ',' in paste_component:
-            header, image_data = paste_component.split(',', 1)
-            image_bytes = base64.b64decode(image_data)
-            # Store in session state
-            st.session_state.pasted_image = io.BytesIO(image_bytes)
-            st.rerun()
-    except Exception as e:
-        pass
+def predict_image(model, pil_image):
+    """Return a prediction dict for a PIL.Image using the given model.
 
-# Use pasted image if available and no file uploaded
-if uploaded_file is None and st.session_state.pasted_image is not None:
-    uploaded_file = st.session_state.pasted_image
-    st.success("✅ Image pasted from clipboard!")
+    Returns: {prediction, label, confidence, emoji, card_class}
+    """
+    arr = preprocess_image(pil_image)
+    pred = float(model.predict(arr, verbose=0)[0][0])
+    if pred > 0.5:
+        label = "Dog"
+        confidence = pred
+        emoji = "🐕"
+        card_class = "dog-card"
+    else:
+        label = "Cat"
+        confidence = 1 - pred
+        emoji = "🐱"
+        card_class = "cat-card"
 
-# Process uploaded or pasted image
+    return {
+        "prediction": pred,
+        "label": label,
+        "confidence": confidence,
+        "emoji": emoji,
+        "card_class": card_class,
+    }
+
+
+# Process uploaded image (UI layer only)
 if uploaded_file is not None:
     # Create responsive columns
     col1, col2 = st.columns([1, 1], gap="large")
-    
+
     with col1:
         st.markdown("### 📸 Your Image")
-        # Display uploaded image
         img = Image.open(uploaded_file).convert("RGB")
-        st.image(img, use_column_width=True)
-    
+        st.image(img, use_container_width=True)
+
     with col2:
         st.markdown("### 🤖 AI Prediction")
-        
-        # Preprocess image
-        with st.spinner("🔍 Analyzing..."):
-            # Resize image to model input size
-            img_resized = img.resize((128, 128))
-            
-            # Convert to array and normalize
-            img_array = np.array(img_resized) / 255.0
-            img_array = np.expand_dims(img_array, axis=0)
-            
-            # Make prediction
-            prediction = model.predict(img_array, verbose=0)[0][0]
-            
-            # Determine label and confidence
-            if prediction > 0.5:
-                label = "Dog"
-                confidence = prediction
-                emoji = "🐕"
-                card_class = "dog-card"
-            else:
-                label = "Cat"
-                confidence = 1 - prediction
-                emoji = "🐱"
-                card_class = "cat-card"
-        
+        with st.spinner("� Analyzing..."):
+            result = predict_image(model, img)
+
         # Display results with animation
         st.markdown(f"""
-            <div class="prediction-card {card_class}">
-                <div class="prediction-emoji">{emoji}</div>
-                <div class="prediction-label">It's a {label}!</div>
-                <div class="prediction-confidence">{confidence*100:.1f}% Confident</div>
+            <div class="prediction-card {result['card_class']}">
+                <div class="prediction-emoji">{result['emoji']}</div>
+                <div class="prediction-label">It's a {result['label']}!</div>
+                <div class="prediction-confidence">{result['confidence']*100:.1f}% Confident</div>
             </div>
         """, unsafe_allow_html=True)
-        
-        # Show detailed metrics
-        st.metric("Prediction Score", f"{prediction:.4f}", delta=None)
-        st.progress(float(confidence))
-        
+
+        st.metric("Prediction Score", f"{result['prediction']:.4f}", delta=None)
+        st.progress(float(result['confidence']))
+
     # Additional info in expander
     with st.expander("ℹ️ Model Information"):
         st.markdown("""
@@ -383,20 +344,13 @@ if uploaded_file is not None:
         3. Confidence score is calculated
         4. Result is displayed with certainty level
         """)
-
 else:
-    # Clear pasted image when new upload section is shown
-    if st.session_state.pasted_image is not None:
-        if st.button("🗑️ Clear pasted image"):
-            st.session_state.pasted_image = None
-            st.rerun()
-    
     # Show helpful tips when no image is uploaded
-    st.info("👆 Upload an image or paste from clipboard to get started!")
-    
+    st.info("👆 Upload an image to get started!")
+
     # Quick tips in columns
     col1, col2, col3 = st.columns(3)
-    
+
     with col1:
         st.markdown("""
         <div style="text-align: center; padding: 1rem;">
@@ -405,16 +359,16 @@ else:
             <p style="font-size: 0.9rem; color: #6c757d;">Drag & drop or browse files</p>
         </div>
         """, unsafe_allow_html=True)
-    
+
     with col2:
         st.markdown("""
         <div style="text-align: center; padding: 1rem;">
-            <div style="font-size: 2rem;">📋</div>
-            <strong>Paste</strong>
-            <p style="font-size: 0.9rem; color: #6c757d;">Copy image & press Ctrl+V</p>
+            <div style="font-size: 2rem;">⚡</div>
+            <strong>Instant</strong>
+            <p style="font-size: 0.9rem; color: #6c757d;">Get results in seconds</p>
         </div>
         """, unsafe_allow_html=True)
-    
+
     with col3:
         st.markdown("""
         <div style="text-align: center; padding: 1rem;">
@@ -424,31 +378,20 @@ else:
         </div>
         """, unsafe_allow_html=True)
 
-# Instructions
-with st.expander("📖 How to Use"):
+    # Instructions (simplified)
     st.markdown("""
     ### Getting Started
     
-    **Method 1: Upload File**
+    **Method: Upload File**
     1. Drag & drop or click to browse
     2. Select a clear image of a cat or dog
     3. Wait for instant analysis
-    
-    **Method 2: Paste from Clipboard**
-    1. Copy an image from anywhere (right-click → Copy Image)
-    2. Press `Ctrl+V` (Windows) or `Cmd+V` (Mac) anywhere on the page
-    3. Image will automatically upload and analyze
     
     ### Tips for Best Results
     - ✅ Use clear, well-lit photos
     - ✅ Ensure the animal is the main subject
     - ✅ Avoid heavily filtered images
     - ✅ JPG, JPEG, or PNG formats work best
-    
-    ### Supported Formats
-    - 📸 JPEG/JPG
-    - 🖼️ PNG
-    - 📁 Max size: 200MB
     """)
 
 # Footer
