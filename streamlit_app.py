@@ -58,10 +58,8 @@ def load_trained_model():
     if not os.path.exists(model_path):
         st.info("📥 Downloading model file (111 MB)... This may take a minute on first run.")
         try:
-            # Replace this URL with your Google Drive file's download link
-            # To get the link: Upload model to Google Drive > Right-click > Get link > Set to "Anyone with the link"
-            # Then use the file ID in this format: https://drive.google.com/uc?id=FILE_ID
-            model_url = "https://drive.google.com/uc?id=YOUR_FILE_ID_HERE"
+            # Download model from Google Drive
+            model_url = "https://drive.google.com/uc?id=1NUmowM-IX9yRhsNad1G42042YAEzYVig"
             gdown.download(model_url, model_path, quiet=False)
             st.success("✅ Model downloaded successfully!")
         except Exception as e:
