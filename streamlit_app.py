@@ -249,60 +249,72 @@ if model is None:
     st.error("⚠️ Unable to load the AI model. Please check your connection.")
     st.stop()
 
-# Create tabs for different input methods
-tab1, tab2 = st.tabs(["📁 Upload Image", "📋 Paste from Clipboard"])
+# Instructions for paste
+st.markdown("""
+    <div style="text-align: center; padding: 0.5rem; margin-bottom: 1rem; background: linear-gradient(135deg, #f5f7fa 0%, #c3cfe2 100%); border-radius: 12px;">
+        <small style="color: #667eea; font-weight: 600;">� Tip: You can also paste an image from clipboard using <strong>Ctrl+V</strong> (Windows) or <strong>Cmd+V</strong> (Mac)</small>
+    </div>
+""", unsafe_allow_html=True)
 
-uploaded_file = None
+# File uploader
+uploaded_file = st.file_uploader(
+    "Drop an image here or click to browse", 
+    type=["jpg", "jpeg", "png"],
+    help="Supports JPG, JPEG, PNG formats - or paste from clipboard!",
+    label_visibility="collapsed"
+)
 
-with tab1:
-    uploaded_file = st.file_uploader(
-        "Drop an image here or click to browse", 
-        type=["jpg", "jpeg", "png"],
-        help="Supports JPG, JPEG, PNG formats",
-        label_visibility="collapsed"
-    )
+# Use session state to store pasted image
+if 'pasted_image' not in st.session_state:
+    st.session_state.pasted_image = None
 
-with tab2:
-    st.markdown("""
-        <div class="paste-area">
-            <div class="paste-icon">📋</div>
-            <h3>Paste Image from Clipboard</h3>
-            <p style="color: #6c757d;">Press Ctrl+V (Windows) or Cmd+V (Mac) to paste</p>
-        </div>
-    """, unsafe_allow_html=True)
+# JavaScript for clipboard paste functionality
+paste_component = st.components.v1.html("""
+    <div id="paste-listener" style="position: fixed; top: 0; left: 0; width: 100%; height: 100%; pointer-events: none; z-index: -1;"></div>
+    <script>
+    let lastPastedData = null;
     
-    # JavaScript for clipboard paste
-    paste_image = st.components.v1.html("""
-        <script>
-        document.addEventListener('paste', function(e) {
-            const items = e.clipboardData.items;
-            for (let i = 0; i < items.length; i++) {
-                if (items[i].type.indexOf('image') !== -1) {
-                    const blob = items[i].getAsFile();
-                    const reader = new FileReader();
-                    reader.onload = function(event) {
+    document.addEventListener('paste', function(e) {
+        const items = e.clipboardData.items;
+        for (let i = 0; i < items.length; i++) {
+            if (items[i].type.indexOf('image') !== -1) {
+                const blob = items[i].getAsFile();
+                const reader = new FileReader();
+                reader.onload = function(event) {
+                    const imageData = event.target.result;
+                    if (imageData !== lastPastedData) {
+                        lastPastedData = imageData;
                         window.parent.postMessage({
                             type: 'streamlit:setComponentValue',
-                            value: event.target.result
+                            value: imageData
                         }, '*');
-                    };
-                    reader.readAsDataURL(blob);
-                }
+                    }
+                };
+                reader.readAsDataURL(blob);
+                e.preventDefault();
             }
-        });
-        </script>
-        <div style="height: 1px;"></div>
-    """, height=1)
-    
-    if paste_image:
-        try:
-            # Decode base64 image
-            image_data = paste_image.split(',')[1]
-            image_bytes = base64.b64decode(image_data)
-            uploaded_file = io.BytesIO(image_bytes)
+        }
+    });
+    </script>
+""", height=0)
 
-        except:
-            st.error("Unable to process pasted image. Please try uploading instead.")
+# Handle pasted image
+if paste_component:
+    try:
+        # Extract base64 data
+        if ',' in paste_component:
+            header, image_data = paste_component.split(',', 1)
+            image_bytes = base64.b64decode(image_data)
+            # Store in session state
+            st.session_state.pasted_image = io.BytesIO(image_bytes)
+            st.rerun()
+    except Exception as e:
+        pass
+
+# Use pasted image if available and no file uploaded
+if uploaded_file is None and st.session_state.pasted_image is not None:
+    uploaded_file = st.session_state.pasted_image
+    st.success("✅ Image pasted from clipboard!")
 
 # Process uploaded or pasted image
 if uploaded_file is not None:
@@ -373,6 +385,12 @@ if uploaded_file is not None:
         """)
 
 else:
+    # Clear pasted image when new upload section is shown
+    if st.session_state.pasted_image is not None:
+        if st.button("🗑️ Clear pasted image"):
+            st.session_state.pasted_image = None
+            st.rerun()
+    
     # Show helpful tips when no image is uploaded
     st.info("👆 Upload an image or paste from clipboard to get started!")
     
@@ -412,14 +430,14 @@ with st.expander("📖 How to Use"):
     ### Getting Started
     
     **Method 1: Upload File**
-    1. Click the "Upload Image" tab
-    2. Drag & drop or click to browse
-    3. Select a clear image of a cat or dog
+    1. Drag & drop or click to browse
+    2. Select a clear image of a cat or dog
+    3. Wait for instant analysis
     
     **Method 2: Paste from Clipboard**
-    1. Copy an image (right-click → Copy Image)
-    2. Click the "Paste from Clipboard" tab
-    3. Press `Ctrl+V` (Windows) or `Cmd+V` (Mac)
+    1. Copy an image from anywhere (right-click → Copy Image)
+    2. Press `Ctrl+V` (Windows) or `Cmd+V` (Mac) anywhere on the page
+    3. Image will automatically upload and analyze
     
     ### Tips for Best Results
     - ✅ Use clear, well-lit photos
