@@ -49,8 +49,28 @@ st.markdown("Upload an image of a cat or dog, and let AI identify it!")
 # Load model with caching
 @st.cache_resource
 def load_trained_model():
+    import os
+    import gdown
+    
+    model_path = "dogs_vs_cats_production_model.keras"
+    
+    # If model doesn't exist locally, download from Google Drive
+    if not os.path.exists(model_path):
+        st.info("📥 Downloading model file (111 MB)... This may take a minute on first run.")
+        try:
+            # Replace this URL with your Google Drive file's download link
+            # To get the link: Upload model to Google Drive > Right-click > Get link > Set to "Anyone with the link"
+            # Then use the file ID in this format: https://drive.google.com/uc?id=FILE_ID
+            model_url = "https://drive.google.com/uc?id=YOUR_FILE_ID_HERE"
+            gdown.download(model_url, model_path, quiet=False)
+            st.success("✅ Model downloaded successfully!")
+        except Exception as e:
+            st.error(f"Failed to download model: {e}")
+            st.info("Please upload the model file to Google Drive and update the URL in streamlit_app.py")
+            return None
+    
     try:
-        model = load_model("dogs_vs_cats_production_model.keras")
+        model = load_model(model_path)
         return model
     except Exception as e:
         st.error(f"Error loading model: {e}")
