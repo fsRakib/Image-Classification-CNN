@@ -1,9 +1,18 @@
+"""
+Streamlit Frontend for Cat vs Dog Image Classification
+Connects to FastAPI backend for predictions
+"""
+
 import streamlit as st
-import numpy as np
-from tensorflow.keras.models import load_model
 from PIL import Image
 import io
-import base64
+import requests
+from typing import Optional, Dict, Any
+import os
+
+# Configuration - Environment-based settings
+API_BASE_URL = os.getenv("API_BASE_URL", "http://localhost:8000")
+API_TIMEOUT = int(os.getenv("API_TIMEOUT", "30"))
 
 # Page configuration
 st.set_page_config(

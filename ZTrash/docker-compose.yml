@@ -1,0 +1,22 @@
+version: "3.8"
+
+services:
+  api:
+    build: .
+    container_name: cat-dog-classifier-api
+    ports:
+      - "8000:8000"
+    environment:
+      - MODEL_PATH=dogs_vs_cats_production_model.keras
+      - API_HOST=0.0.0.0
+      - API_PORT=8000
+    volumes:
+      # Persist downloaded model
+      - ./dogs_vs_cats_production_model.keras:/app/dogs_vs_cats_production_model.keras
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8000/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 40s
