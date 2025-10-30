@@ -1,18 +1,30 @@
 """
 Streamlit Frontend for Cat vs Dog Image Classification
 Connects to FastAPI backend for predictions
+
+Architecture:
+- Frontend (Streamlit): UI/UX only, no ML logic
+- Backend (FastAPI): ML model inference, API endpoints
+- API Client: Decoupled communication layer
+
+This design allows the backend to serve multiple clients
+(web, mobile, third-party apps) independently.
 """
 
 import streamlit as st
 from PIL import Image
-import io
-import requests
-from typing import Optional, Dict, Any
+from typing import Dict, Any
 import os
+
+# Import the API client
+from api_client import ClassifierAPIClient
 
 # Configuration - Environment-based settings
 API_BASE_URL = os.getenv("API_BASE_URL", "http://localhost:8000")
 API_TIMEOUT = int(os.getenv("API_TIMEOUT", "30"))
+
+# Initialize API client
+api_client = ClassifierAPIClient(base_url=API_BASE_URL, timeout=API_TIMEOUT)
 
 # Page configuration
 st.set_page_config(
@@ -224,39 +236,83 @@ st.markdown("""
 st.markdown("<h1>🐾 Cat vs Dog AI</h1>", unsafe_allow_html=True)
 st.markdown('<p class="subtitle">Upload or paste an image, and let AI identify it instantly!</p>', unsafe_allow_html=True)
 
-# Load model with caching
-@st.cache_resource
-def load_trained_model():
-    import os
-    import gdown
+# ============================================================================
+# API Wrapper Functions - Simplified interface using API client
+# ============================================================================
+
+def check_api_health() -> Dict[str, Any]:
+    """
+    Check if the API backend is available and healthy
     
-    model_path = "dogs_vs_cats_production_model.keras"
+    Returns:
+        dict: Health status information
+    """
+    return api_client.health_check()
+
+
+def get_model_info() -> Dict[str, Any]:
+    """
+    Get information about the model from the API
     
-    # If model doesn't exist locally, download from Google Drive
-    if not os.path.exists(model_path):
-        st.info("📥 Downloading model file (111 MB)... This may take a minute on first run.")
-        try:
-            # Download model from Google Drive
-            model_url = "https://drive.google.com/uc?id=1NUmowM-IX9yRhsNad1G42042YAEzYVig"
-            gdown.download(model_url, model_path, quiet=False)
-            st.success("✅ Model downloaded successfully!")
-        except Exception as e:
-            st.error(f"Failed to download model: {e}")
-            st.info("Please upload the model file to Google Drive and update the URL in streamlit_app.py")
-            return None
-    
+    Returns:
+        dict: Model information or None if unavailable
+    """
     try:
-        model = load_model(model_path)
-        return model
+        return api_client.get_model_info()
     except Exception as e:
-        st.error(f"Error loading model: {e}")
+        st.error(f"Failed to fetch model info: {e}")
         return None
 
-model = load_trained_model()
 
-if model is None:
-    st.error("⚠️ Unable to load the AI model. Please check your connection.")
+def predict_via_api(image: Image.Image, filename: str = "image.jpg") -> Dict[str, Any]:
+    """
+    Send image to API for prediction
+    
+    Args:
+        image: PIL Image object
+        filename: Name for the uploaded file
+        
+    Returns:
+        dict: Prediction results or None if request fails
+    """
+    try:
+        return api_client.predict_from_pil_image(image, filename)
+    except Exception as e:
+        st.error(f"❌ Prediction failed: {str(e)}")
+        return None
+
+
+# ============================================================================
+# Startup Check - Verify API availability
+# ============================================================================
+
+@st.cache_data(ttl=60)  # Cache for 60 seconds
+def verify_api_connection():
+    """Check API health on app startup"""
+    return check_api_health()
+
+
+# Check API availability
+api_status = verify_api_connection()
+
+if not api_status["available"]:
+    st.error("⚠️ **Backend API is not available**")
+    st.error(f"Error: {api_status['error']}")
+    st.info(f"""
+    **Please start the FastAPI backend:**
+    
+    1. Open a terminal in the project directory
+    2. Run: `uvicorn api:app --reload`
+    3. Or run: `python api.py`
+    
+    The API should be available at: **{API_BASE_URL}**
+    """)
     st.stop()
+else:
+    # Show subtle success indicator in sidebar
+    with st.sidebar:
+        st.success("✅ API Connected")
+        st.caption(f"Endpoint: {API_BASE_URL}")
 
 # Instructions for paste
 # Short helpful tip (paste feature removed)
@@ -274,43 +330,47 @@ uploaded_file = st.file_uploader(
     label_visibility="collapsed"
 )
 
-# --- Helper functions (decoupled from Streamlit UI) ---
-def preprocess_image(pil_image, target_size=(128, 128)):
-    """Resize and normalize a PIL.Image and return a numpy batch array."""
-    img = pil_image.convert("RGB").resize(target_size)
-    arr = np.array(img) / 255.0
-    arr = np.expand_dims(arr, axis=0)
-    return arr
+# ============================================================================
+# UI Helper Functions - Format API responses for display
+# ============================================================================
 
-
-def predict_image(model, pil_image):
-    """Return a prediction dict for a PIL.Image using the given model.
-
-    Returns: {prediction, label, confidence, emoji, card_class}
+def format_prediction_result(api_response: Dict[str, Any]) -> Dict[str, Any]:
     """
-    arr = preprocess_image(pil_image)
-    pred = float(model.predict(arr, verbose=0)[0][0])
-    if pred > 0.5:
-        label = "Dog"
-        confidence = pred
+    Transform API response into UI-friendly format
+    
+    Args:
+        api_response: Response from API predict endpoint
+        
+    Returns:
+        dict: Formatted data for UI display
+    """
+    prediction = api_response["prediction"]
+    confidence = api_response["confidence_percentage"]
+    
+    # Determine emoji and card styling
+    if prediction == "Dog":
         emoji = "🐕"
         card_class = "dog-card"
     else:
-        label = "Cat"
-        confidence = 1 - pred
         emoji = "🐱"
         card_class = "cat-card"
-
+    
     return {
-        "prediction": pred,
-        "label": label,
-        "confidence": confidence,
+        "label": prediction,
+        "confidence": confidence / 100.0,  # Convert to 0-1 range for progress bar
+        "confidence_percentage": confidence,
         "emoji": emoji,
         "card_class": card_class,
+        "raw_score": api_response.get("raw_score", 0),
+        "probabilities": api_response.get("probabilities", {}),
+        "metadata": api_response.get("metadata", {})
     }
 
 
-# Process uploaded image (UI layer only)
+# ============================================================================
+# Image Processing and Display
+# ============================================================================
+
 if uploaded_file is not None:
     # Create responsive columns
     col1, col2 = st.columns([1, 1], gap="large")
@@ -322,37 +382,80 @@ if uploaded_file is not None:
 
     with col2:
         st.markdown("### 🤖 AI Prediction")
-        with st.spinner("� Analyzing..."):
-            result = predict_image(model, img)
+        with st.spinner("🔄 Analyzing via API..."):
+            # Send image to API for prediction
+            api_response = predict_via_api(img, uploaded_file.name)
+        
+        if api_response and api_response.get("success"):
+            # Format the API response for display
+            result = format_prediction_result(api_response)
+            
+            # Display results with animation
+            st.markdown(f"""
+                <div class="prediction-card {result['card_class']}">
+                    <div class="prediction-emoji">{result['emoji']}</div>
+                    <div class="prediction-label">It's a {result['label']}!</div>
+                    <div class="prediction-confidence">{result['confidence_percentage']:.1f}% Confident</div>
+                </div>
+            """, unsafe_allow_html=True)
 
-        # Display results with animation
-        st.markdown(f"""
-            <div class="prediction-card {result['card_class']}">
-                <div class="prediction-emoji">{result['emoji']}</div>
-                <div class="prediction-label">It's a {result['label']}!</div>
-                <div class="prediction-confidence">{result['confidence']*100:.1f}% Confident</div>
-            </div>
-        """, unsafe_allow_html=True)
-
-        st.metric("Prediction Score", f"{result['prediction']:.4f}", delta=None)
-        st.progress(float(result['confidence']))
+            # Show detailed metrics
+            col_a, col_b = st.columns(2)
+            with col_a:
+                st.metric("🐱 Cat", f"{result['probabilities'].get('cat', 0):.1f}%")
+            with col_b:
+                st.metric("🐕 Dog", f"{result['probabilities'].get('dog', 0):.1f}%")
+            
+            st.progress(float(result['confidence']))
+            
+            # Show raw score in small text
+            st.caption(f"Raw Score: {result['raw_score']:.4f}")
+        else:
+            st.warning("⚠️ Prediction failed. Please try again or check API connection.")
 
     # Additional info in expander
     with st.expander("ℹ️ Model Information"):
-        st.markdown("""
-        **Technical Details:**
-        - **Input Size:** 128×128 pixels RGB
-        - **Architecture:** Deep CNN with BatchNorm & Dropout
-        - **Output:** Binary Classification
-        - **Training Data:** 25,000 images
-        - **Accuracy:** ~92%+
+        # Fetch model info from API
+        model_info = get_model_info()
         
-        **How it works:**
-        1. Image is resized and normalized
-        2. Neural network analyzes patterns
-        3. Confidence score is calculated
-        4. Result is displayed with certainty level
-        """)
+        if model_info:
+            st.markdown(f"""
+            **Technical Details:**
+            - **Model Name:** {model_info.get('model_name', 'N/A')}
+            - **Architecture:** {model_info.get('model_type', 'N/A')}
+            - **Input Size:** {model_info.get('input_shape', 'N/A')}
+            - **Output Classes:** {', '.join(model_info.get('output_classes', []))}
+            - **Model Size:** {model_info.get('model_size_mb', 'N/A')} MB
+            - **Training Accuracy:** {model_info.get('training_accuracy', 'N/A')}
+            - **Supported Formats:** {', '.join(model_info.get('supported_formats', []))}
+            
+            **How it works:**
+            1. Image is uploaded to the backend API
+            2. Image is preprocessed (resized & normalized)
+            3. Deep CNN analyzes patterns and features
+            4. Confidence score is calculated
+            5. Result is returned and displayed
+            
+            **API Backend:**
+            - **Framework:** {model_info.get('framework', 'N/A')}
+            - **Endpoint:** {API_BASE_URL}
+            """)
+        else:
+            st.markdown("""
+            **Technical Details:**
+            - **Input Size:** 128×128 pixels RGB
+            - **Architecture:** Deep CNN with BatchNorm & Dropout
+            - **Output:** Binary Classification
+            - **Training Data:** 25,000 images
+            - **Accuracy:** ~92%+
+            
+            **How it works:**
+            1. Image is uploaded to the backend API
+            2. Image is preprocessed (resized & normalized)
+            3. Neural network analyzes patterns
+            4. Confidence score is calculated
+            5. Result is returned and displayed
+            """)
 else:
     # Show helpful tips when no image is uploaded
     st.info("👆 Upload an image to get started!")
