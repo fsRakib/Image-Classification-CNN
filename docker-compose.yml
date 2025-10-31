@@ -1,0 +1,73 @@
+version: "3.8"
+
+services:
+  # FastAPI Backend Service
+  api:
+    build:
+      context: .
+      target: api
+    container_name: catdog-api
+    ports:
+      - "8000:8000"
+    environment:
+      - PYTHONUNBUFFERED=1
+    volumes:
+      # Mount model directory for persistence (optional)
+      - ./dogs_vs_cats_production_model.keras:/app/dogs_vs_cats_production_model.keras:ro
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8000/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 40s
+    networks:
+      - catdog-network
+
+  # Streamlit Frontend Service
+  streamlit:
+    build:
+      context: .
+      target: streamlit
+    container_name: catdog-streamlit
+    ports:
+      - "8501:8501"
+    environment:
+      - PYTHONUNBUFFERED=1
+      - API_BASE_URL=http://api:8000
+      - API_TIMEOUT=30
+    depends_on:
+      api:
+        condition: service_healthy
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8501/_stcore/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 40s
+    networks:
+      - catdog-network
+
+  # Optional: Full-stack service (combines both API and Streamlit)
+  # Uncomment to use this instead of separate services
+  # fullstack:
+  #   build:
+  #     context: .
+  #     target: fullstack
+  #   container_name: catdog-fullstack
+  #   ports:
+  #     - "8000:8000"
+  #     - "8501:8501"
+  #   environment:
+  #     - PYTHONUNBUFFERED=1
+  #   restart: unless-stopped
+  #   networks:
+  #     - catdog-network
+
+networks:
+  catdog-network:
+    driver: bridge
+# Optional: Add volumes for persistence
+# volumes:
+#   model-data:
