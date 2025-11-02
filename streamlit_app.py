@@ -20,8 +20,13 @@ import os
 from api_client import ClassifierAPIClient
 
 # Configuration - Environment-based settings
-API_BASE_URL = os.getenv("API_BASE_URL", "http://localhost:8000")
-API_TIMEOUT = int(os.getenv("API_TIMEOUT", "30"))
+# Try Streamlit secrets first, then environment variables, then localhost
+try:
+    API_BASE_URL = st.secrets.get("API_BASE_URL", os.getenv("API_BASE_URL", "http://localhost:8000"))
+    API_TIMEOUT = int(st.secrets.get("API_TIMEOUT", os.getenv("API_TIMEOUT", "30")))
+except:
+    API_BASE_URL = os.getenv("API_BASE_URL", "http://localhost:8000")
+    API_TIMEOUT = int(os.getenv("API_TIMEOUT", "30"))
 
 # Initialize API client
 api_client = ClassifierAPIClient(base_url=API_BASE_URL, timeout=API_TIMEOUT)
